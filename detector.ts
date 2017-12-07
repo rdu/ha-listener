@@ -22,8 +22,8 @@ export class HotwordDetector
     detector: any = null;
     hotwordBuffer: Buffer = Buffer.from([]);
     commandBuffer: Buffer = Buffer.from([]);
-    commandStream = null;
-    silenceTimer = null;
+    commandStream:any = null;
+    silenceTimer:any = null;
 
     constructor()
     {

@@ -1,0 +1,23 @@
+{
+  "name": "ha-listener",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "build": "tsc -w -p ."
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "ts-loader": "^3.2.0",
+    "typescript": "^2.6.2"
+  },
+  "dependencies": {
+    "@google-cloud/speech": "^0.11.0",
+    "@types/node": "^8.0.56",
+    "node-record-lpcm16": "^0.3.0",
+    "snowboy": "^1.2.0",
+    "stream-throttle": "^0.1.3"
+  }
+}

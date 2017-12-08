@@ -35,7 +35,7 @@ export class HotwordDetector
         $this.detector = new Detector({
             resource: "node_modules/snowboy/resources/common.res",
             models: this.models,
-            audioGain: 4.0
+            audioGain: 2.0
         });
 
         $this.detector.on('silence', function () { $this.onSilence(); });
@@ -69,8 +69,9 @@ export class HotwordDetector
             .recognize({
                 config: {
                     encoding: "LINEAR16",
-                    sampleRateHertz: 32000,
+                    sampleRateHertz: 16000,
                     languageCode: "de-DE",
+		    speech_context: ['hallo', 'uschi']
                 },
                 audio: {
                     content: buffer.toString('base64')
@@ -85,6 +86,7 @@ export class HotwordDetector
                 if (transcription.toLowerCase() == hotword.toLowerCase())
                 {
                     console.log("verified hotword", hotword);
+		    console.log(JSON.stringify(response));
                     $this.state = DetectorStates.VERIFIED;
                 }
                 else
@@ -103,7 +105,7 @@ export class HotwordDetector
     private onSound(buffer)
     {
         let $this = this;
-        console.log("on sound", this.state);
+//        console.log("on sound", this.state);
         clearTimeout(this.silenceTimer);
         this.silenceTimer = null;
         if (this.state == DetectorStates.LISTENING)
@@ -122,7 +124,7 @@ export class HotwordDetector
                     .streamingRecognize({
                         config: {
                             encoding: "LINEAR16",
-                            sampleRateHertz: 32000,
+                            sampleRateHertz: 16000,
                             languageCode: "de-DE",
                         },
                         interimResults: false
@@ -171,7 +173,7 @@ export class HotwordDetector
     private onSilence()
     {
         let $this = this;
-        console.log("on silence", this.state);
+//        console.log("on silence", this.state);
         if (this.state == DetectorStates.LISTENING)
         {
             this.hotwordBuffer = Buffer.from([]);
@@ -183,7 +185,7 @@ export class HotwordDetector
                 this.silenceTimer = setTimeout(function ()
                 {
                     $this.finishRecognizing();
-                }, 500);
+                }, 400);
             }
         }
     }

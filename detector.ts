@@ -1,18 +1,15 @@
-import {Verify} from "crypto";
-import {clearTimeout} from "timers";
-
-const Detector = require('snowboy').Detector;
-const Models = require('snowboy').Models;
-const speech = require('@google-cloud/speech');
+const Detector = require("snowboy").Detector;
+const Models = require("snowboy").Models;
+const speech = require("@google-cloud/speech");
+const ee = require("event-emitter");
 const speechClient = new speech.SpeechClient({
-    keyFilename: './key.json'
+    keyFilename: "./key.json"
 });
 
 enum DetectorStates
 {
     LISTENING,
-    VERIFYING,
-    VERIFIED
+    RECOGNIZING
 }
 
 export class HotwordDetector
@@ -20,17 +17,17 @@ export class HotwordDetector
     state: DetectorStates;
     models: any = null;
     detector: any = null;
-    hotwordBuffer: Buffer = Buffer.from([]);
-    commandBuffer: Buffer = Buffer.from([]);
-    commandStream:any = null;
-    silenceTimer:any = null;
+    stream: any = null;
+    sound = false;
+    buffer: any = Buffer.from([]);
+    currentHotword = null;
 
     constructor()
     {
         console.log("construct hotword decoder");
-        let $this = this;
-        this.state = DetectorStates.LISTENING;
-        this.models = HotwordDetector.createModels();
+        const $this: HotwordDetector = this;
+        $this.state = DetectorStates.LISTENING;
+        $this.models = HotwordDetector.createModels();
 
         $this.detector = new Detector({
             resource: "node_modules/snowboy/resources/common.res",
@@ -38,18 +35,20 @@ export class HotwordDetector
             audioGain: 2.0
         });
 
-        $this.detector.on('silence', function () { $this.onSilence(); });
-        $this.detector.on('hotword', function (index, hotword, buffer) { $this.onHotWord(index, hotword, buffer) });
-        $this.detector.on('sound', function (buffer) { $this.onSound(buffer) });
+        $this.detector.on("hotword", function (index, hotword, buffer)
+        {
+            $this.onHotWord(index, hotword);
+        });
+        this.startStreaming();
     }
 
     static createModels()
     {
-        var models = new Models();
+        const models = new Models();
         models.add({
-            file: 'models/rdu_hallo-uschi_1.pmdl',
-            sensitivity: '0.7',
-            hotwords: 'hallo uschi'
+            file: "models/rdu_hallo-uschi_1.pmdl",
+            sensitivity: "0.7",
+            hotwords: "hallo uschi"
         });
         return models;
     }
@@ -59,134 +58,102 @@ export class HotwordDetector
         stream.pipe(this.detector);
     }
 
-    private verifyHotword(hotword, index, buffer)
+    public onRawData(buffer)
     {
-        let $this = this;
-        this.state = DetectorStates.VERIFYING;
-        console.log("verifying hotword", hotword, index);
+        if (this.stream !== null)
+        {
+            let value = 0;
+            for (let i = 0; i < buffer.length; i += 2)
+            {
+                value += Math.abs(buffer.readInt16LE(i));
+            }
+            const v = value / buffer.length;
+            if (v > 30)
+            {
+                // console.log("audio");
+                this.buffer = Buffer.concat([this.buffer, buffer]);
+            }
+            else
+            {
+                // console.log("silence");
+            }
+        }
+        if (this.state === DetectorStates.RECOGNIZING)
+        {
+            if (this.buffer.length > 0)
+            {
+                this.stream.write(this.buffer);
+                this.buffer = Buffer.from([]);
+            }
+        }
+    }
 
-        speechClient
-            .recognize({
+    private onHotWord(index, hotword)
+    {
+        console.log("on hotword", index, hotword);
+        if (this.state === DetectorStates.LISTENING)
+        {
+            this.currentHotword = hotword;
+            this.state = DetectorStates.RECOGNIZING;
+        }
+    }
+
+    private startStreaming()
+    {
+        console.log("start streaming");
+        const $this = this;
+        // this.stream = fs.createWriteStream("/tmp/wav/xx.raw");
+        this.stream = speechClient
+            .streamingRecognize({
                 config: {
                     encoding: "LINEAR16",
                     sampleRateHertz: 16000,
                     languageCode: "de-DE",
-		    speech_context: ['hallo', 'uschi']
+                    maxAlternatives: 1,
+                    speechContexts: [
+                        {
+                            phrases: ["uschi", "marshall", "hallo"]
+                        }
+                    ],
                 },
-                audio: {
-                    content: buffer.toString('base64')
-                }
+                interimResults: false
             })
-            .then(data =>
+            .on("error", console.error)
+            .on("data", data =>
             {
-                const response = data[0];
-                const transcription = response.results
-                    .map(result => result.alternatives[0].transcript)
-                    .join('\n');
-                if (transcription.toLowerCase() == hotword.toLowerCase())
+                if (data !== null && data.results !== null && data.results.length > 0 && data.results[0].alternatives !== null && data.results[0].alternatives.length > 0)
                 {
-                    console.log("verified hotword", hotword);
-		    console.log(JSON.stringify(response));
-                    $this.state = DetectorStates.VERIFIED;
+                    const transcript = data.results[0].alternatives[0].transcript;
+                    const confidence = data.results[0].alternatives[0].confidence;
+                    if (transcript.toLowerCase().indexOf($this.currentHotword) !== -1)
+                    {
+                        const cleaned = transcript.replace(/hallo uschi/ig, "").trim();
+                        console.log(`recognized: ${cleaned}, with ${confidence} confidence`);
+                        $this.emit("result", cleaned);
+                    }
+                    else
+                    {
+                        console.warn(`hotword: ${this.currentHotword} could not be verified`);
+                        console.log(JSON.stringify(data));
+                    }
                 }
                 else
                 {
-                    console.log("error verify hotword", hotword, "found", transcription);
-                    console.log(response);
-                    $this.finishRecognizing();
+                    console.warn(`no result for: ${this.currentHotword} in current audio`);
+                    console.log(JSON.stringify(data));
                 }
-            })
-            .catch(err =>
-            {
-                console.error('ERROR:', err);
             });
     }
 
-    private onSound(buffer)
-    {
-        let $this = this;
-//        console.log("on sound", this.state);
-        clearTimeout(this.silenceTimer);
-        this.silenceTimer = null;
-        if (this.state == DetectorStates.LISTENING)
-        {
-            this.hotwordBuffer = Buffer.concat([this.hotwordBuffer, buffer]);
-        }
-        if (this.state == DetectorStates.VERIFYING || this.state == DetectorStates.VERIFIED)
-        {
-            this.commandBuffer = Buffer.concat([this.commandBuffer, buffer]);
-        }
-        if (this.state == DetectorStates.VERIFIED)
-        {
-            if (this.commandStream == null)
-            {
-                this.commandStream = speechClient
-                    .streamingRecognize({
-                        config: {
-                            encoding: "LINEAR16",
-                            sampleRateHertz: 16000,
-                            languageCode: "de-DE",
-                        },
-                        interimResults: false
-                    })
-                    .on('error', console.error)
-                    .on('data', data =>
-                    {
-                        console.log(
-                            `Transcription: ${data.results[0].alternatives[0].transcript}`
-                        );
-                    });
-            }
-            $this.commandStream.write(this.commandBuffer);
-            $this.commandBuffer = Buffer.from([]);
-        }
-    }
-
-    private onHotWord(index, hotword, buffer)
-    {
-        console.log("on hotword", index, hotword);
-        if (this.state == DetectorStates.LISTENING)
-        {
-            this.hotwordBuffer = Buffer.concat([this.hotwordBuffer, buffer]);
-            this.verifyHotword(hotword, index, this.hotwordBuffer);
-            this.hotwordBuffer = this.hotwordBuffer = Buffer.from([]);
-        }
-    }
-
-    public finishRecognizing()
+    public destroy()
     {
         this.state = DetectorStates.LISTENING;
-        if (this.commandStream != null)
+        if (this.stream !== null)
         {
-            this.commandStream.end();
+            this.stream.end();
         }
-        this.hotwordBuffer = Buffer.from([]);
-        this.commandBuffer = Buffer.from([]);
-        this.commandStream = null;
-        if (this.silenceTimer != null)
-        {
-            clearTimeout(this.silenceTimer);
-            this.silenceTimer = null;
-        }
-    }
-
-    private onSilence()
-    {
-        let $this = this;
-//        console.log("on silence", this.state);
-        if (this.state == DetectorStates.LISTENING)
-        {
-            this.hotwordBuffer = Buffer.from([]);
-        }
-        if (this.state == DetectorStates.VERIFIED || this.state == DetectorStates.VERIFYING)
-        {
-            if (this.silenceTimer == null)
-            {
-                this.silenceTimer = setTimeout(function ()
-                {
-                    $this.finishRecognizing();
-                }, 400);
-            }
-        }
+        this.stream = null;
     }
 }
+
+ee(HotwordDetector.prototype);

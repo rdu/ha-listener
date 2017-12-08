@@ -14,6 +14,8 @@ enum DetectorStates
 
 export class HotwordDetector
 {
+    emit;
+    on;
     state: DetectorStates;
     models: any = null;
     detector: any = null;
